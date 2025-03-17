@@ -1,8 +1,16 @@
 from flask import Blueprint, request, jsonify
+from marshmallow import ValidationError
+
 from app.models import User, db
 from app.schemas import user_schema, users_schema
 from flasgger import swag_from
-from app.docs.user_docs import *
+from app.docs.user_docs import (
+    update_user_doc,
+    create_user_doc,
+    delete_user_doc,
+    get_user_doc,
+    get_users_doc,
+)
 
 user_blueprint = Blueprint("users", __name__)
 
@@ -10,16 +18,18 @@ user_blueprint = Blueprint("users", __name__)
 @user_blueprint.route("/users", methods=["POST"])
 @swag_from(create_user_doc)
 def create_user():
-    data = request.json
-    name = data.get("name")
-    email = data.get("email")
+    try:
+        data = user_schema.load(request.json)
+    except ValidationError as err:
+        return jsonify({"error": err.messages}), 400
 
-    if not name or not email:
-        return jsonify({"error": "Name and email are required"}), 400
+    if User.query.filter_by(email=data.email).first():
+        return jsonify({"error": {"email": ["Email already exists."]}}), 400
 
-    new_user = User(name=name, email=email)
+    new_user = User(name=data["name"], email=data["email"])
     db.session.add(new_user)
     db.session.commit()
+
     return user_schema.jsonify(new_user), 201
 
 
@@ -40,12 +50,22 @@ def get_user(id):
 @user_blueprint.route("/users/<int:id>", methods=["PUT"])
 @swag_from(update_user_doc)
 def update_user(id):
+    try:
+        data = user_schema.load(request.json, partial=True)
+    except ValidationError as err:
+        return jsonify({"error": err.messages}), 400
+
     user = User.query.get_or_404(id)
-    data = request.json
-    user.name = data.get("name", user.name)
-    user.email = data.get("email", user.email)
+
+    if hasattr(data, "email") and data.email != user.email:
+        if User.query.filter(User.email == data.email).first():
+            return jsonify({"error": {"email": ["Email already exists."]}}), 400
+
+    user.name = getattr(data, "name", user.name)
+    user.email = getattr(data, "email", user.email)
     db.session.commit()
-    return user_schema.jsonify(user)
+
+    return user_schema.jsonify(user), 200
 
 
 @user_blueprint.route("/users/<int:id>", methods=["DELETE"])
